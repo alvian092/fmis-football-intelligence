@@ -1,8 +1,5 @@
 name: Deploy FMIS Cloudflare Worker
 on:
-  push:
-    branches: [main]
-    paths: ["cloudflare/**", ".github/workflows/cloudflare-worker.yml"]
   workflow_dispatch:
 permissions:
   contents: read
