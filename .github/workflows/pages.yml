@@ -13,6 +13,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   deploy:
+    # GitHub Pages is not available for private repositories on GitHub Free.
+    # Keep this deployment dormant until the repository is public and Pages is enabled.
+    if: github.event.repository.visibility == 'public'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
