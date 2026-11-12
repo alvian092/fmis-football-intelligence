@@ -1,0 +1,16 @@
+name: Build APK (Android project pending)
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Android project
+        run: |
+          if [ -f gradlew ] || [ -f android/gradlew ]; then
+            echo "Gradle wrapper found; Android build configuration can be enabled."
+          else
+            echo "APK build is not ready: no Android Gradle project or wrapper exists yet."
+            exit 1
+          fi
