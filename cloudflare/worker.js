@@ -43,6 +43,7 @@ function parseCsv(input) {
     if (!raw.home_team || !raw.away_team || raw.home_team === raw.away_team) throw new Error("Invalid team names on CSV row " + (index + 2));
     const num = (key, integer = false, optional = false) => {
       if (optional && (raw[key] === undefined || raw[key] === "")) return null;
+      if (raw[key] === undefined || raw[key] === "") throw new Error("Missing " + key + " on CSV row " + (index + 2));
       const n = Number(raw[key]);
       if (!Number.isFinite(n) || n < 0 || (integer && !Number.isInteger(n))) throw new Error("Invalid " + key + " on CSV row " + (index + 2));
       return n;
