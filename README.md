@@ -19,6 +19,19 @@ python -m pytest -q
 ```
 Dashboard: http://127.0.0.1:8000 · API docs: http://127.0.0.1:8000/docs
 
+
+## Football-Data.co.uk import
+
+Download the official CSV season files (or a season ZIP) from [Football-Data.co.uk downloads](https://football-data.co.uk/downloadm.php), then extract the files into `data/raw/`. For the last five completed seasons, use 2021/22 through 2025/26 (season codes `2122`, `2223`, `2324`, `2425`, `2526`). The converter recognises the main league division codes and the additional-country codes documented in the script.
+
+Convert the source files to the FMIS schema:
+
+```bash
+python scripts/normalize_football_data.py --input-dir data/raw --output data/processed/fmis_matches.csv
+```
+
+The converter handles Windows-1252/UTF-8 files, date formats, inconsistent source headers, missing/unplayed fixtures and duplicate rows. It writes `date,home_team,away_team,home_goals,away_goals,competition`, which can be uploaded to the Worker dashboard. Football-Data match files do not provide a consistent xG field; these imported records are therefore goals-only unless xG is sourced separately. The source describes its free data as intended for private individual use and excludes commercial/data-training products using automated bots or AI; review its current terms before using or redistributing the data.
+
 ## Deploy
 
 ### Cloudflare Worker + persistent KV (recommended)
