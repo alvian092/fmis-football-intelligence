@@ -81,7 +81,7 @@ def normalize_headers(frame: pd.DataFrame) -> pd.DataFrame:
 
 def league_code(path: Path) -> str:
     # Handles common names such as E0.csv, E0_2122.csv and 2122_E0.csv.
-    tokens = re.findall(r"[A-Za-z]{1,3}", path.stem.upper())
+    tokens = re.findall(r"[A-Za-z0-9]{1,3}", path.stem.upper())
     for token in tokens:
         if token in LEAGUES:
             return token
@@ -122,6 +122,10 @@ def convert(input_dir: Path, output: Path, min_date: str, max_date: str) -> pd.D
             source_comp = raw["competition"] if "competition" in raw.columns else None
             if source_comp is not None:
                 out["competition"] = source_comp.astype("string").str.strip()
+                out["competition"] = out["competition"].map(
+                    lambda value: LEAGUES.get(str(value).upper(), value)
+                    if pd.notna(value) else value
+                )
                 out.loc[out["competition"].isna() | (out["competition"] == ""), "competition"] = LEAGUES.get(code, code or path.stem)
             else:
                 out["competition"] = LEAGUES.get(code, code or path.stem)
