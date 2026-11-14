@@ -181,8 +181,28 @@ async function handle(request, env) {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
   if (url.pathname === "/") return json({ name: "FMIS", version: "0.2.0", docs: "Cloudflare Worker API", health: "/api/health" });
   if (url.pathname === "/api/health" && request.method === "GET") {
-    const rows = await env.FMIS_DATA.get("matches", "json");
-    return json({ status: "ok", version: "0.2.0", matches_loaded: rows ? rows.length : 0 });
+    const dataset = await env.FMIS_DATA.get("dataset:v1", "json");
+    const legacyRows = dataset ? null : await env.FMIS_DATA.get("matches", "json");
+    const rows = dataset?.matches ?? legacyRows ?? [];
+    return json({
+      status: "ok",
+      version: "0.3.0",
+      storage: "cloudflare_kv",
+      matches_loaded: rows.length,
+      dataset_updated_at: dataset?.updated_at ?? null
+    });
+  }
+  if (url.pathname === "/api/data/info" && request.method === "GET") {
+    const dataset = await env.FMIS_DATA.get("dataset:v1", "json");
+    const legacyRows = dataset ? null : await env.FMIS_DATA.get("matches", "json");
+    const rows = dataset?.matches ?? legacyRows ?? [];
+    return json({
+      status: rows.length ? "loaded" : "empty",
+      storage: "cloudflare_kv",
+      matches_loaded: rows.length,
+      updated_at: dataset?.updated_at ?? null,
+      columns: dataset?.columns ?? null
+    });
   }
   if (url.pathname === "/api/data/csv" && request.method === "POST") {
     if (!env.FMIS_ADMIN_TOKEN) return fail("FMIS_ADMIN_TOKEN secret is not configured", 503);
@@ -193,13 +213,34 @@ async function handle(request, env) {
     if (file.size > 10 * 1024 * 1024) return fail("CSV file exceeds 10 MB limit", 413);
     try {
       const parsed = parseCsv((await file.text()).replace(/^\uFEFF/, ""));
-      await env.FMIS_DATA.put("matches", JSON.stringify(parsed.matches));
-      return json({ status: "loaded", loaded: parsed.matches.length, columns: parsed.columns });
+      const dataset = {
+        schema_version: 1,
+        updated_at: new Date().toISOString(),
+        row_count: parsed.matches.length,
+        columns: parsed.columns,
+        matches: parsed.matches
+      };
+      const serialized = JSON.stringify(dataset);
+      if (new TextEncoder().encode(serialized).byteLength > 25 * 1024 * 1024) {
+        return fail("Parsed dataset exceeds the 25 MB Cloudflare KV value limit", 413);
+      }
+      // Store the complete dataset and its metadata in one KV value so readers
+      // never observe a new metadata record paired with an old matches record.
+      await env.FMIS_DATA.put("dataset:v1", serialized);
+      return json({
+        status: "loaded",
+        loaded: parsed.matches.length,
+        columns: parsed.columns,
+        storage: "cloudflare_kv",
+        updated_at: dataset.updated_at
+      });
     } catch (e) { return fail(e.message, 422); }
   }
   if (url.pathname === "/api/analyze" && request.method === "POST") {
-    const matches = await env.FMIS_DATA.get("matches", "json");
-    if (!matches || !matches.length) return fail("No historical data loaded. Upload a CSV first.", 409);
+    const dataset = await env.FMIS_DATA.get("dataset:v1", "json");
+    const legacyRows = dataset ? null : await env.FMIS_DATA.get("matches", "json");
+    const matches = dataset?.matches ?? legacyRows ?? [];
+    if (!matches.length) return fail("No historical data loaded. Upload a CSV first.", 409);
     let body;
     try { body = await request.json(); } catch { return fail("Request body must be valid JSON"); }
     const { home_team, away_team, as_of, total_line = 2.5, handicap_home = -0.5 } = body || {};
