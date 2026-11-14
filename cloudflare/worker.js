@@ -307,7 +307,7 @@ async function handle(request, env) {
     if (!fixture || typeof fixture.home_team !== "string" || !fixture.home_team.trim() ||
         typeof fixture.away_team !== "string" || !fixture.away_team.trim() ||
         fixture.home_team.trim().toLowerCase() === fixture.away_team.trim().toLowerCase() ||
-        typeof fixture.as_of !== "string" || !/^\\d{4}-\\d{2}-\\d{2}$/.test(fixture.as_of)) {
+        typeof fixture.as_of !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(fixture.as_of)) {
       return fail("A valid fixture with home_team, away_team and as_of is required");
     }
     if (!probs || !["home", "draw", "away"].every(k => typeof probs[k] === "number" && Number.isFinite(probs[k]) && probs[k] >= 0 && probs[k] <= 1) ||
@@ -342,7 +342,7 @@ async function handle(request, env) {
     const records = await listPredictions(env.FMIS_DATA);
     return json(trackerMetrics(records));
   }
-  const resultMatch = url.pathname.match(/^\\/api\\/predictions\\/([0-9a-f-]+)\\/result$/i);
+  const resultMatch = url.pathname.match(/^\/api\/predictions\\/([0-9a-f-]+)\\/result$/i);
   if (resultMatch && request.method === "POST") {
     if (!env.FMIS_ADMIN_TOKEN) return fail("FMIS_ADMIN_TOKEN secret is not configured", 503);
     if (request.headers.get("X-Admin-Token") !== env.FMIS_ADMIN_TOKEN) return fail("Invalid admin token", 401);
