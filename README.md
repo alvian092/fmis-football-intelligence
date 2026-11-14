@@ -32,6 +32,25 @@ python scripts/normalize_football_data.py --input-dir data/raw --output data/pro
 
 The converter handles Windows-1252/UTF-8 files, date formats, inconsistent source headers, missing/unplayed fixtures and duplicate rows. It writes `date,home_team,away_team,home_goals,away_goals,competition`, which can be uploaded to the Worker dashboard. Football-Data match files do not provide a consistent xG field; these imported records are therefore goals-only unless xG is sourced separately. The source describes its free data as intended for private individual use and excludes commercial/data-training products using automated bots or AI; review its current terms before using or redistributing the data.
 
+
+## Prediction Tracker and backtesting
+
+The Cloudflare Worker exposes:
+- `POST /api/predictions` to save a pre-match prediction (admin token required).
+- `GET /api/predictions` to list saved predictions.
+- `POST /api/predictions/{id}/result` to record the final home/away score (admin token required; a settled result cannot be overwritten).
+- `GET /api/tracker/metrics` for settled count, accuracy, multiclass Brier score, log loss and top-confidence calibration bins.
+
+The dashboard includes controls to save an analyzed fixture, review saved predictions, and enter its actual score. Enter predictions before kickoff to avoid hindsight bias. Tracker records are stored as individual Cloudflare KV keys with the `prediction:` prefix.
+
+Run a chronological walk-forward backtest on the normalized historical CSV:
+
+```bash
+python scripts/backtest.py --input data/processed/fmis_matches.csv --output data/processed/backtest_report.json
+```
+
+The backtest predicts each match using only results dated before that match day; all matches on the same date are evaluated before that date's results are added. It reports accuracy, multiclass Brier score, log loss and confidence calibration. A backtest is a historical evaluation, not a guarantee of future performance.
+
 ## Deploy
 
 ### Cloudflare Worker + persistent KV (recommended)
