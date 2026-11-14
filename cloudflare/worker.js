@@ -179,7 +179,7 @@ function explain(home, away, prediction, dataQuality) {
 async function handle(request, env) {
   const url = new URL(request.url);
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-  if (url.pathname === "/") return json({ name: "FMIS", version: "0.2.0", docs: "Cloudflare Worker API", health: "/api/health" });
+  if (url.pathname === "/") return json({ name: "FMIS", version: "0.3.0", docs: "Cloudflare Worker API", health: "/api/health" });
   if (url.pathname === "/api/health" && request.method === "GET") {
     const dataset = await env.FMIS_DATA.get("dataset:v1", "json");
     const legacyRows = dataset ? null : await env.FMIS_DATA.get("matches", "json");
