@@ -33,7 +33,7 @@ $("upload").onclick=async()=>{
   body.append("file",f);
   try{
     const r=await request("/api/data/csv",{method:"POST",headers:{"X-Admin-Token":$("adminToken").value},body});
-    $("uploadMsg").textContent=(r.storage==="cloudflare_kv"?"Saved permanently to Cloudflare KV: ":"Validated and loaded ")+r.loaded+" rows.";
+    $("uploadMsg").textContent=(r.storage==="cloudflare_kv"?"Saved to Cloudflare KV: ":"Validated and loaded ")+r.loaded+" rows.";
     await health();
   }catch(e){$("uploadMsg").textContent=e.message;}
 };
