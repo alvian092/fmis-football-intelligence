@@ -39,6 +39,8 @@ $("upload").onclick=async()=>{
   }catch(e){$("uploadMsg").textContent=e.message;}
 };
 $("analyze").onclick=async()=>{
+  lastPrediction=null;
+  $("savePrediction").disabled=true;
   try{
     const fixture={home_team:$("home").value.trim(),away_team:$("away").value.trim(),as_of:$("date").value};
     const r=await request("/api/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...fixture,total_line:Number($("total").value),handicap_home:Number($("handicap").value)})});
