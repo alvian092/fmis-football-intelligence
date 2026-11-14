@@ -342,7 +342,7 @@ async function handle(request, env) {
     const records = await listPredictions(env.FMIS_DATA);
     return json(trackerMetrics(records));
   }
-  const resultMatch = url.pathname.match(/^\/api\/predictions\\/([0-9a-f-]+)\\/result$/i);
+  const resultMatch = url.pathname.match(/^\/api\/predictions\/([0-9a-f-]+)\/result$/i);
   if (resultMatch && request.method === "POST") {
     if (!env.FMIS_ADMIN_TOKEN) return fail("FMIS_ADMIN_TOKEN secret is not configured", 503);
     if (request.headers.get("X-Admin-Token") !== env.FMIS_ADMIN_TOKEN) return fail("Invalid admin token", 401);
