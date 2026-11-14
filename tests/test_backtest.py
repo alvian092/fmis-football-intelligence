@@ -14,7 +14,7 @@ def test_walk_forward_backtest_uses_only_prior_matches(tmp_path):
     ]
     path = tmp_path / "matches.csv"
     pd.DataFrame(rows, columns=["date", "home_team", "away_team", "home_goals", "away_goals"]).to_csv(path, index=False)
-    report = run_backtest(path)
+    report = run_backtest(path, min_matches=4)
     assert report["matches_evaluated"] == 1
     assert report["date_from"] == "2025-01-07"
     assert 0 <= report["metrics"]["accuracy"] <= 1
