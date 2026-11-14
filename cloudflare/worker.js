@@ -176,13 +176,93 @@ function explain(home, away, prediction, dataQuality) {
   return { headline: home + " vs " + away + ": " + labels[top] + " is the most likely 1X2 outcome", explanations: notes, decision: "ANALYSIS_ONLY" };
 }
 
+async function listPredictions(kv) {
+  const records = [];
+  let cursor;
+  do {
+    const page = await kv.list({ prefix: "prediction:", limit: 1000, ...(cursor ? { cursor } : {}) });
+    const values = await Promise.all(page.keys.map(async item => {
+      const value = await kv.get(item.name, "json");
+      return value;
+    }));
+    records.push(...values.filter(Boolean));
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor && records.length < 10000);
+  return records;
+}
+function validScore(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 30;
+}
+function outcomeFor(homeGoals, awayGoals) {
+  return homeGoals > awayGoals ? "home" : homeGoals < awayGoals ? "away" : "draw";
+}
+function trackerMetrics(records) {
+  const settled = records.filter(r => r.status === "settled" && r.actual && r.probabilities);
+  const total = records.length;
+  if (!settled.length) return { total, pending: total, settled: 0, accuracy: null, brier_score: null, log_loss: null, calibration: [] };
+  let correct = 0, brier = 0, logLoss = 0;
+  const bins = Array.from({ length: 10 }, (_, i) => ({ bin: i, count: 0, confidence_sum: 0, accuracy_sum: 0 }));
+  for (const record of settled) {
+    const probs = record.probabilities;
+    const actual = outcomeFor(record.actual.home_goals, record.actual.away_goals);
+    const keys = ["home", "draw", "away"];
+    const predicted = keys.reduce((a, b) => probs[a] >= probs[b] ? a : b);
+    if (predicted === actual) correct++;
+    for (const key of keys) {
+      const target = key === actual ? 1 : 0;
+      brier += (probs[key] - target) ** 2;
+    }
+    logLoss += -Math.log(Math.max(1e-15, probs[actual]));
+    const confidence = probs[predicted];
+    const bin = bins[Math.min(9, Math.floor(confidence * 10))];
+    bin.count++;
+    bin.confidence_sum += confidence;
+    bin.accuracy_sum += predicted === actual ? 1 : 0;
+  }
+  const n = settled.length;
+  return {
+    total,
+    pending: total - n,
+    settled: n,
+    accuracy: correct / n,
+    brier_score: brier / n,
+    log_loss: logLoss / n,
+    calibration: bins.filter(b => b.count).map(b => ({
+      range: (b.bin / 10).toFixed(1) + "-" + ((b.bin + 1) / 10).toFixed(1),
+      count: b.count,
+      mean_confidence: b.confidence_sum / b.count,
+      observed_accuracy: b.accuracy_sum / b.count
+    }))
+  };
+}
+
 async function handle(request, env) {
   const url = new URL(request.url);
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-  if (url.pathname === "/") return json({ name: "FMIS", version: "0.2.0", docs: "Cloudflare Worker API", health: "/api/health" });
+  if (url.pathname === "/") return json({ name: "FMIS", version: "0.3.0", docs: "Cloudflare Worker API", health: "/api/health" });
   if (url.pathname === "/api/health" && request.method === "GET") {
-    const rows = await env.FMIS_DATA.get("matches", "json");
-    return json({ status: "ok", version: "0.2.0", matches_loaded: rows ? rows.length : 0 });
+    const dataset = await env.FMIS_DATA.get("dataset:v1", "json");
+    const legacyRows = dataset ? null : await env.FMIS_DATA.get("matches", "json");
+    const rows = dataset?.matches ?? legacyRows ?? [];
+    return json({
+      status: "ok",
+      version: "0.3.0",
+      storage: "cloudflare_kv",
+      matches_loaded: rows.length,
+      dataset_updated_at: dataset?.updated_at ?? null
+    });
+  }
+  if (url.pathname === "/api/data/info" && request.method === "GET") {
+    const dataset = await env.FMIS_DATA.get("dataset:v1", "json");
+    const legacyRows = dataset ? null : await env.FMIS_DATA.get("matches", "json");
+    const rows = dataset?.matches ?? legacyRows ?? [];
+    return json({
+      status: rows.length ? "loaded" : "empty",
+      storage: "cloudflare_kv",
+      matches_loaded: rows.length,
+      updated_at: dataset?.updated_at ?? null,
+      columns: dataset?.columns ?? null
+    });
   }
   if (url.pathname === "/api/data/csv" && request.method === "POST") {
     if (!env.FMIS_ADMIN_TOKEN) return fail("FMIS_ADMIN_TOKEN secret is not configured", 503);
@@ -193,13 +273,99 @@ async function handle(request, env) {
     if (file.size > 10 * 1024 * 1024) return fail("CSV file exceeds 10 MB limit", 413);
     try {
       const parsed = parseCsv((await file.text()).replace(/^\uFEFF/, ""));
-      await env.FMIS_DATA.put("matches", JSON.stringify(parsed.matches));
-      return json({ status: "loaded", loaded: parsed.matches.length, columns: parsed.columns });
+      const dataset = {
+        schema_version: 1,
+        updated_at: new Date().toISOString(),
+        row_count: parsed.matches.length,
+        columns: parsed.columns,
+        matches: parsed.matches
+      };
+      const serialized = JSON.stringify(dataset);
+      if (new TextEncoder().encode(serialized).byteLength > 25 * 1024 * 1024) {
+        return fail("Parsed dataset exceeds the 25 MB Cloudflare KV value limit", 413);
+      }
+      // Store the complete dataset and its metadata in one KV value so readers
+      // never observe a new metadata record paired with an old matches record.
+      await env.FMIS_DATA.put("dataset:v1", serialized);
+      return json({
+        status: "loaded",
+        loaded: parsed.matches.length,
+        columns: parsed.columns,
+        storage: "cloudflare_kv",
+        updated_at: dataset.updated_at
+      });
     } catch (e) { return fail(e.message, 422); }
   }
+  if (url.pathname === "/api/predictions" && request.method === "POST") {
+    if (!env.FMIS_ADMIN_TOKEN) return fail("FMIS_ADMIN_TOKEN secret is not configured", 503);
+    if (request.headers.get("X-Admin-Token") !== env.FMIS_ADMIN_TOKEN) return fail("Invalid admin token", 401);
+    let body;
+    try { body = await request.json(); } catch { return fail("Request body must be valid JSON"); }
+    const fixture = body?.fixture;
+    const prediction = body?.prediction;
+    const probs = prediction?.markets?.["1x2"];
+    if (!fixture || typeof fixture.home_team !== "string" || !fixture.home_team.trim() ||
+        typeof fixture.away_team !== "string" || !fixture.away_team.trim() ||
+        fixture.home_team.trim().toLowerCase() === fixture.away_team.trim().toLowerCase() ||
+        typeof fixture.as_of !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(fixture.as_of)) {
+      return fail("A valid fixture with home_team, away_team and as_of is required");
+    }
+    if (!probs || !["home", "draw", "away"].every(k => typeof probs[k] === "number" && Number.isFinite(probs[k]) && probs[k] >= 0 && probs[k] <= 1) ||
+        Math.abs(probs.home + probs.draw + probs.away - 1) > 0.002) {
+      return fail("Prediction must include valid normalized 1X2 probabilities");
+    }
+    const id = crypto.randomUUID();
+    const record = {
+      id,
+      status: "pending",
+      created_at: new Date().toISOString(),
+      fixture,
+      probabilities: { home: probs.home, draw: probs.draw, away: probs.away },
+      prediction,
+      data_quality: body.data_quality ?? null,
+      actual: null,
+      settled_at: null
+    };
+    await env.FMIS_DATA.put("prediction:" + id, JSON.stringify(record));
+    return json({ status: "saved", prediction: record }, 201);
+  }
+  if (url.pathname === "/api/predictions" && request.method === "GET") {
+    const page = await env.FMIS_DATA.list({ prefix: "prediction:", limit: 1000 });
+    const values = await Promise.all(page.keys.map(item => env.FMIS_DATA.get(item.name, "json")));
+    let records = values.filter(Boolean);
+    const status = url.searchParams.get("status");
+    if (status === "pending" || status === "settled") records = records.filter(r => r.status === status);
+    records.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    return json({ predictions: records, count: records.length, list_complete: page.list_complete });
+  }
+  if (url.pathname === "/api/tracker/metrics" && request.method === "GET") {
+    const records = await listPredictions(env.FMIS_DATA);
+    return json(trackerMetrics(records));
+  }
+  const resultMatch = url.pathname.match(/^\/api\/predictions\/([0-9a-f-]+)\/result$/i);
+  if (resultMatch && request.method === "POST") {
+    if (!env.FMIS_ADMIN_TOKEN) return fail("FMIS_ADMIN_TOKEN secret is not configured", 503);
+    if (request.headers.get("X-Admin-Token") !== env.FMIS_ADMIN_TOKEN) return fail("Invalid admin token", 401);
+    const id = resultMatch[1];
+    const key = "prediction:" + id;
+    const record = await env.FMIS_DATA.get(key, "json");
+    if (!record) return fail("Prediction not found", 404);
+    if (record.status === "settled") return fail("This prediction already has an actual result", 409);
+    let body;
+    try { body = await request.json(); } catch { return fail("Request body must be valid JSON"); }
+    const homeGoals = body?.home_goals, awayGoals = body?.away_goals;
+    if (!validScore(homeGoals) || !validScore(awayGoals)) return fail("Actual goals must be non-negative whole numbers up to 30");
+    record.actual = { home_goals: homeGoals, away_goals: awayGoals, outcome: outcomeFor(homeGoals, awayGoals) };
+    record.status = "settled";
+    record.settled_at = new Date().toISOString();
+    await env.FMIS_DATA.put(key, JSON.stringify(record));
+    return json({ status: "settled", prediction: record });
+  }
   if (url.pathname === "/api/analyze" && request.method === "POST") {
-    const matches = await env.FMIS_DATA.get("matches", "json");
-    if (!matches || !matches.length) return fail("No historical data loaded. Upload a CSV first.", 409);
+    const dataset = await env.FMIS_DATA.get("dataset:v1", "json");
+    const legacyRows = dataset ? null : await env.FMIS_DATA.get("matches", "json");
+    const matches = dataset?.matches ?? legacyRows ?? [];
+    if (!matches.length) return fail("No historical data loaded. Upload a CSV first.", 409);
     let body;
     try { body = await request.json(); } catch { return fail("Request body must be valid JSON"); }
     const { home_team, away_team, as_of, total_line = 2.5, handicap_home = -0.5 } = body || {};
