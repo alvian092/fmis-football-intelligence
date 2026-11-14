@@ -20,7 +20,8 @@ async function request(path,options={}){
 async function health(){
   try{
     const h=await request("/api/health");
-    $("status").textContent="API online · "+h.matches_loaded+" rows";
+    const savedAt=h.dataset_updated_at? " · saved "+new Date(h.dataset_updated_at).toLocaleString():"";
+    $("status").textContent="API online · "+h.matches_loaded+" rows"+savedAt;
   }catch(e){
     $("status").textContent=base?"API offline · "+e.message:"API offline · isi URL backend di config.js";
   }
@@ -32,7 +33,8 @@ $("upload").onclick=async()=>{
   body.append("file",f);
   try{
     const r=await request("/api/data/csv",{method:"POST",headers:{"X-Admin-Token":$("adminToken").value},body});
-    $("uploadMsg").textContent="Validated and loaded "+r.loaded+" rows.";
+    $("uploadMsg").textContent=(r.storage==="cloudflare_kv"?"Saved permanently to Cloudflare KV: ":"Validated and loaded ")+r.loaded+" rows.";
+    await health();
   }catch(e){$("uploadMsg").textContent=e.message;}
 };
 $("analyze").onclick=async()=>{
